@@ -1,183 +1,296 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TextInput, 
-  TouchableOpacity, 
-  Image, 
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  Image,
   Alert,
-  ScrollView,
   FlatList,
   Modal,
   KeyboardAvoidingView,
-  Platform
+  Platform,
+  Dimensions,
+  Animated,
+  ActivityIndicator,
+  StyleSheet
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { supabase } from './services/supabase';
 
-// Configuração inicial de notificações
+const { width, height } = Dimensions.get('window');
+
+// Configuração de notificações
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
     shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+    shouldSetBadge: false
+  })
 });
 
-// Dados mockados para o dashboard
-const MOCK_STUDENTS = [
-  { id: '1', name: 'Maria Silva', class: '3º Ano A', parentName: 'João Silva', status: 'Na escola' },
-  { id: '2', name: 'Pedro Santos', class: '3º Ano A', parentName: 'Ana Santos', status: 'A caminho' },
-  { id: '3', name: 'Lucas Ferreira', class: '3º Ano A', parentName: 'Roberto Ferreira', status: 'Saída confirmada' },
-  { id: '4', name: 'Julia Mendes', class: '3º Ano A', parentName: 'Carla Mendes', status: 'Na escola' },
-  { id: '5', name: 'Sophia Oliveira', class: '3º Ano A', parentName: 'Marcos Oliveira', status: 'Ausente' },
-];
-
-// Mensagens mockadas para o chat
-const INITIAL_MESSAGES = [
-  { id: '1', sender: 'professor', text: 'Olá! Tudo bem?', time: '09:00' },
-  { id: '2', sender: 'pai', text: 'Tudo ótimo! Como está meu filho hoje?', time: '09:05' },
-  { id: '3', sender: 'professor', text: 'Ele está muito bem! Participou bastante da aula de matemática.', time: '09:10' },
-];
-
 export default function App() {
-  // Estados
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userRole, setUserRole] = useState('');
+  const [lastRequestTime, setLastRequestTime] = useState(0);
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [activeTab, setActiveTab] = useState('main');
-  
-  // Estados para o Dashboard
-  const [students, setStudents] = useState(MOCK_STUDENTS);
+  const [showOnboarding, setShowOnboarding] = useState(true);
+  const [userRole, setUserRole] = useState('parent');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [students, setStudents] = useState([]);
   const [selectedStudent, setSelectedStudent] = useState(null);
-  
-  // Estados para o Chat
-  const [chats, setChats] = useState([
-    { id: '1', name: 'João Silva (Pai de Maria)', lastMessage: 'Ele está muito bem!', time: '09:10', unread: 0 },
-    { id: '2', name: 'Ana Santos (Mãe de Pedro)', lastMessage: 'Pode mandar a lição de casa?', time: '08:45', unread: 2 },
-    { id: '3', name: 'Prof. Mariana (3º Ano B)', lastMessage: 'Vamos planejar a feira de ciências', time: 'Ontem', unread: 0 },
-  ]);
+  const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
-  const [messages, setMessages] = useState(INITIAL_MESSAGES);
+  const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [chatModalVisible, setChatModalVisible] = useState(false);
-
-  // Estados compartilhados
   const [parentStatus, setParentStatus] = useState({ sent: false, time: '' });
   const [teacherStatus, setTeacherStatus] = useState({ ready: false, time: '' });
+  const [currentPage, setCurrentPage] = useState(0);
+  
+  // Refs
+  const flatListRef = useRef(null);
+  const scrollX = useRef(new Animated.Value(0)).current;
+  
+  // Dados para onboarding
+  const onboardingData = [
+    {
+      id: '1',
+      title: 'Bem-vindo ao Alerta Escola',
+      description: 'Conectando pais e professores para um melhor acompanhamento escolar',
+      image: require('./assets/onboarding1.png')
+    },
+    {
+      id: '2',
+      title: 'Comunicação em tempo real',
+      description: 'Receba notificações e comunique-se com os professores facilmente',
+      image: require('./assets/onboarding2.png')
+    },
+    {
+      id: '3',
+      title: 'Facilidade para todos',
+      description: 'Interface intuitiva para melhorar a experiência dos pais e professores',
+      image: require('./assets/onboarding3.png')
+    }
+  ];
 
-  // Efeito para permissões
-  useEffect(() => {
-    (async () => {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== 'granted') Alert.alert('Permissão para notificações negada');
-    })();
-  }, []);
+  // Login com email e senha (alternativa ao OTP)
+  const handleEmailLogin = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email,
+        password: password,
+      });
 
-  // Função de Login (simplificado para demo)
-  const handleLogin = () => {
-    if (email && password && userRole) {
-      setIsLoggedIn(true);
-      Alert.alert('Bem-vindo!', `Você entrou como: ${userRole}`);
-    } else {
-      Alert.alert('Erro', 'Preencha todos os campos e selecione um perfil');
+      if (error) throw error;
+    } catch (error) {
+      Alert.alert('Erro no login', error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Função para enviar mensagem
-  const handleSendMessage = () => {
-    if (newMessage.trim() === '') return;
-    
-    const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const newMsg = {
-      id: Date.now().toString(),
-      sender: userRole, // 'pai' ou 'professor'
-      text: newMessage.trim(),
-      time: currentTime,
-    };
-    
-    setMessages([...messages, newMsg]);
-    setNewMessage('');
-    
-    // Atualizar o último estado da mensagem na lista de chats
-    const updatedChats = chats.map(chat => {
-      if (chat.id === activeChatId) {
-        return {
-          ...chat,
-          lastMessage: newMessage.trim(),
-          time: currentTime,
-          unread: 0,
-        };
-      }
-      return chat;
-    });
-    
-    setChats(updatedChats);
+  // Login com OTP (magic link)
+  const handleMagicLinkLogin = async () => {
+    const now = Date.now();
+
+    if (now - lastRequestTime < 60000) {
+      Alert.alert("Aguarde", "Tente novamente em alguns instantes.");
+      return;
+    }
+
+    setLastRequestTime(now);
+    setLoading(true);
+
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ 
+        email,
+        options: {
+          emailRedirectTo: 'alertaescola://login-callback'
+        }
+      });
+
+      if (error) throw error;
+      
+      Alert.alert("Verifique seu email", "Um link de acesso foi enviado.");
+    } catch (error) {
+      Alert.alert("Erro", error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Tela de Login
-  if (!isLoggedIn) {
-    return (
-      <LinearGradient
-        colors={['#6366f1', '#4338ca']}
-        style={styles.loginContainer}
-      >
-        <View style={styles.loginBox}>
-          <Image
-            source={{ uri: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' }}
-            style={styles.profileImage}
+  // Cadastro de usuário
+  const handleSignUp = async () => {
+    if (!email || !password || !name) {
+      Alert.alert("Erro", "Preencha todos os campos");
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      // Criar usuário
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name,
+            role: userRole
+          }
+        }
+      });
+
+      if (authError) throw authError;
+
+      // Se usuário criado com sucesso, adicionar à tabela de perfis
+      if (authData.user) {
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert([
+            { 
+              id: authData.user.id, 
+              name, 
+              email,
+              role: userRole,
+              created_at: new Date()
+            }
+          ]);
+
+        if (profileError) throw profileError;
+      }
+
+      Alert.alert("Sucesso", "Conta criada com sucesso!");
+      
+    } catch (error) {
+      Alert.alert("Erro no cadastro", error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Logout
+  const handleLogout = async () => {
+    try {
+      setLoading(true);
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+    } catch (error) {
+      Alert.alert("Erro ao sair", error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleAddStudent = () => {
+    // Lógica para adicionar aluno
+    console.log('Adicionando aluno');
+  };
+  
+  const loadUserData = async (user) => {
+    // Lógica para carregar dados do usuário
+    console.log('Carregando dados do usuário:', user.id);
+  };
+  
+  const checkIfFirstLaunch = async () => {
+    // Lógica para verificar primeiro acesso
+    console.log('Verificando primeiro acesso');
+  };
+  
+  const skipOnboarding = () => {
+    setShowOnboarding(false);
+  };
+  
+  const goToNextSlide = () => {
+    if (currentPage < onboardingData.length - 1) {
+      flatListRef.current.scrollToIndex({ index: currentPage + 1 });
+      setCurrentPage(currentPage + 1);
+    } else {
+      setShowOnboarding(false);
+    }
+  };
+  
+  const handleSendMessage = () => {
+    // Lógica para enviar mensagens
+    console.log('Enviar mensagem:', newMessage);
+    setNewMessage(''); // Limpar o campo de mensagem após enviar
+  };
+
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        setUser(user);
+        
+        if (user) {
+          await loadUserData(user);
+          setShowOnboarding(false);
+        } else {
+          await checkIfFirstLaunch();
+        }
+      } catch (error) {
+        console.error("Session error:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    checkSession();
+  
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        loadUserData(session.user);
+        setShowOnboarding(false);
+      }
+    });
+
+    return () => subscription?.unsubscribe?.();
+  }, []);
+
+  // Renderização do onboarding
+  const renderOnboardingItem = ({ item }) => (
+    <View style={[styles.onboardingSlide, { width }]}>
+      <Image source={item.image} style={styles.onboardingImage} resizeMode="contain" />
+      <Text style={styles.onboardingTitle}>{item.title}</Text>
+      <Text style={styles.onboardingDescription}>{item.description}</Text>
+    </View>
+  );
+
+  const renderPagination = () => (
+    <View style={styles.paginationContainer}>
+      {onboardingData.map((_, index) => {
+        const inputRange = [(index - 1) * width, index * width, (index + 1) * width];
+        const dotWidth = scrollX.interpolate({
+          inputRange,
+          outputRange: [10, 20, 10],
+          extrapolate: 'clamp'
+        });
+        const opacity = scrollX.interpolate({
+          inputRange,
+          outputRange: [0.3, 1, 0.3],
+          extrapolate: 'clamp'
+        });
+
+        return (
+          <Animated.View
+            key={index.toString()}
+            style={[styles.paginationDot, { width: dotWidth, opacity }]}
           />
+        );
+      })}
+    </View>
+  );
 
-          <TextInput
-            style={styles.input}
-            placeholder="Email"
-            placeholderTextColor="#94a3b8"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-          />
-
-          <TextInput
-            style={styles.input}
-            placeholder="Senha"
-            placeholderTextColor="#94a3b8"
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-          />
-
-          <View style={styles.roleSelector}>
-            <TouchableOpacity
-              style={[styles.roleButton, userRole === 'pai' && styles.selectedRole]}
-              onPress={() => setUserRole('pai')}
-            >
-              <Text style={[styles.roleText, userRole === 'pai' && styles.selectedRoleText]}>Sou Pai</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.roleButton, userRole === 'professor' && styles.selectedRole]}
-              onPress={() => setUserRole('professor')}
-            >
-              <Text style={[styles.roleText, userRole === 'professor' && styles.selectedRoleText]}>Sou Professor</Text>
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
-            <Text style={styles.loginButtonText}>Entrar</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity>
-            <Text style={styles.signupText}>Criar nova conta</Text>
-          </TouchableOpacity>
-        </View>
-      </LinearGradient>
-    );
-  }
-
-  // Chat Modal
+  // Renderização do chat
   const renderChatModal = () => (
     <Modal
       animationType="slide"
@@ -185,7 +298,7 @@ export default function App() {
       visible={chatModalVisible}
       onRequestClose={() => setChatModalVisible(false)}
     >
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         style={styles.modalContainer}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 85 : 0}
@@ -198,7 +311,7 @@ export default function App() {
             {chats.find(chat => chat.id === activeChatId)?.name || 'Chat'}
           </Text>
         </View>
-        
+
         <FlatList
           data={messages}
           keyExtractor={item => item.id}
@@ -213,7 +326,7 @@ export default function App() {
             </View>
           )}
         />
-        
+
         <View style={styles.messageInputContainer}>
           <TextInput
             style={styles.messageInput}
@@ -230,517 +343,478 @@ export default function App() {
     </Modal>
   );
 
-  // Interface principal após login
-  return (
-    <View style={styles.container}>
-      {/* Conteúdo principal baseado na aba ativa */}
-      {activeTab === 'main' ? (
-        // Tela Principal
-        userRole === 'pai' ? (
-          <View style={styles.section}>
-            <Text style={styles.title}>Área do Responsável</Text>
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#6366f1" />
+      </View>
+    );
+  }
+
+  // Tela de onboarding
+  if (showOnboarding) {
+    return (
+      <View style={styles.container}>
+        <TouchableOpacity style={styles.skipButton} onPress={skipOnboarding}>
+          <Text style={styles.skipButtonText}>Pular</Text>
+        </TouchableOpacity>
+
+        <FlatList
+          ref={flatListRef}
+          data={onboardingData}
+          renderItem={renderOnboardingItem}
+          keyExtractor={(item) => item.id}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+            { useNativeDriver: false }
+          )}
+          onMomentumScrollEnd={(e) => {
+            const newPage = Math.floor(e.nativeEvent.contentOffset.x / width);
+            setCurrentPage(newPage);
+          }}
+        />
+
+        {renderPagination()}
+
+        <TouchableOpacity style={styles.nextButton} onPress={goToNextSlide}>
+          <LinearGradient
+            colors={['#6366f1', '#4338ca']}
+            style={styles.nextButtonGradient}
+          >
+            <Text style={styles.nextButtonText}>
+              {currentPage === onboardingData.length - 1 ? 'Começar' : 'Próximo'}
+            </Text>
+            <Ionicons name="arrow-forward" size={20} color="white" />
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Tela de autenticação
+  if (!user) {
+    return (
+      <LinearGradient colors={['#6366f1', '#4338ca']} style={styles.loginContainer}>
+        <View style={styles.loginBox}>
+          <Image
+            source={{ uri: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' }}
+            style={styles.profileImage}
+          />
+
+          {isSignUp && (
+            <TextInput
+              style={styles.input}
+              placeholder="Nome completo"
+              value={name}
+              onChangeText={setName}
+            />
+          )}
+
+          <TextInput
+            style={styles.input}
+            placeholder="Email"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+
+          {isSignUp && (
+            <TextInput
+              style={styles.input}
+              placeholder="Senha"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+          )}
+
+          <View style={styles.roleSelector}>
             <TouchableOpacity
-              style={[styles.button, parentStatus.sent && styles.disabledButton]}
-              onPress={async () => {
-                const time = new Date().toLocaleTimeString();
-                setParentStatus({ sent: true, time });
-                
-                await Notifications.scheduleNotificationAsync({
-                  content: {
-                    title: "🚗 Alerta de Chegada",
-                    body: `Pai chegando às ${time}`,
-                  },
-                  trigger: null,
-                });
-              }}
-              disabled={parentStatus.sent}
+              style={[styles.roleButton, userRole === 'parent' && styles.selectedRole]}
+              onPress={() => setUserRole('parent')}
             >
-              <Text style={styles.buttonText}>
-                {parentStatus.sent ? `Alerta Enviado (${parentStatus.time})` : "Estou a Caminho!"}
+              <Text style={[styles.roleText, userRole === 'parent' && styles.selectedRoleText]}>
+                Sou Responsável
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.roleButton, userRole === 'teacher' && styles.selectedRole]}
+              onPress={() => setUserRole('teacher')}
+            >
+              <Text style={[styles.roleText, userRole === 'teacher' && styles.selectedRoleText]}>
+                Sou Professor
               </Text>
             </TouchableOpacity>
           </View>
-        ) : (
-          // Dashboard do Professor
+
+          <TouchableOpacity
+            style={styles.loginButton}
+            onPress={isSignUp ? handleSignUp : handleMagicLinkLogin}
+          >
+            <Text style={styles.loginButtonText}>
+              {isSignUp ? 'Cadastrar' : 'Entrar com Magic Link'}
+            </Text>
+          </TouchableOpacity>
+
+          {!isSignUp && (
+            <TouchableOpacity
+              style={styles.secondaryLoginButton}
+              onPress={handleEmailLogin}
+            >
+              <Text style={styles.secondaryLoginButtonText}>
+                Entrar com Email e Senha
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity onPress={() => setIsSignUp(!isSignUp)}>
+            <Text style={styles.signupText}>
+              {isSignUp ? 'Já tem conta? Faça login' : 'Ainda não tem conta? Cadastre-se'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
+    );
+  }
+
+  // Tela principal após login
+  return (
+    <View style={styles.container}>
+      {activeTab === 'main' ? (
+        userRole === 'parent' ? (
           <View style={styles.section}>
-            <Text style={styles.title}>Dashboard do Professor</Text>
-            <Text style={styles.subtitle}>Lista de Alunos</Text>
-            
+            <Text style={styles.title}>Área do Responsável</Text>
+
+            <TouchableOpacity
+              style={styles.addButton}
+              onPress={handleAddStudent}
+            >
+              <Ionicons name="add" size={24} color="white" />
+              <Text style={styles.addButtonText}>Adicionar Aluno</Text>
+            </TouchableOpacity>
+
             <FlatList
               data={students}
               keyExtractor={item => item.id}
               renderItem={({ item }) => (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.studentCard}
                   onPress={() => setSelectedStudent(item)}
                 >
-                  <View style={styles.studentInfo}>
-                    <Text style={styles.studentName}>{item.name}</Text>
-                    <Text style={styles.studentClass}>{item.class}</Text>
-                  </View>
-                  <View style={styles.studentStatusContainer}>
-                    <Text style={[
-                      styles.studentStatus,
-                      item.status === 'A caminho' ? styles.statusComing : 
-                      item.status === 'Na escola' ? styles.statusPresent :
-                      item.status === 'Saída confirmada' ? styles.statusConfirmed :
-                      styles.statusAbsent
-                    ]}>
-                      {item.status}
-                    </Text>
-                  </View>
+                  <Text style={styles.studentName}>{item.name}</Text>
+                  <Text style={styles.studentStatus}>{item.status}</Text>
                 </TouchableOpacity>
               )}
             />
-            
-            {selectedStudent && (
-              <View style={styles.studentDetail}>
-                <View style={styles.studentDetailHeader}>
-                  <Text style={styles.studentDetailName}>{selectedStudent.name}</Text>
-                  <TouchableOpacity onPress={() => setSelectedStudent(null)}>
-                    <Ionicons name="close" size={24} color="#64748b" />
-                  </TouchableOpacity>
-                </View>
-                
-                <View style={styles.studentDetailInfo}>
-                  <Text style={styles.studentDetailLabel}>Responsável:</Text>
-                  <Text style={styles.studentDetailValue}>{selectedStudent.parentName}</Text>
-                </View>
-                
-                <View style={styles.studentDetailInfo}>
-                  <Text style={styles.studentDetailLabel}>Turma:</Text>
-                  <Text style={styles.studentDetailValue}>{selectedStudent.class}</Text>
-                </View>
-                
-                <View style={styles.studentDetailInfo}>
-                  <Text style={styles.studentDetailLabel}>Status:</Text>
-                  <Text style={[
-                    styles.studentDetailValue,
-                    selectedStudent.status === 'A caminho' ? styles.textComing : 
-                    selectedStudent.status === 'Na escola' ? styles.textPresent :
-                    selectedStudent.status === 'Saída confirmada' ? styles.textConfirmed :
-                    styles.textAbsent
-                  ]}>
-                    {selectedStudent.status}
-                  </Text>
-                </View>
-                
+          </View>
+        ) : (
+          <View style={styles.section}>
+            <Text style={styles.title}>Área do Professor</Text>
+            <FlatList
+              data={students}
+              keyExtractor={item => item.id}
+              renderItem={({ item }) => (
                 <TouchableOpacity
-                  style={[styles.button, teacherStatus.ready && styles.disabledButton]}
-                  onPress={async () => {
-                    const time = new Date().toLocaleTimeString();
-                    setTeacherStatus({ ready: true, time });
-                    
-                    await Notifications.scheduleNotificationAsync({
-                      content: {
-                        title: "✅ Aluno Pronto",
-                        body: `${selectedStudent.name} preparado às ${time}`,
-                      },
-                      trigger: null,
-                    });
-                    
-                    // Atualizar status do aluno
-                    setStudents(students.map(student => 
-                      student.id === selectedStudent.id 
-                        ? {...student, status: 'Saída confirmada'} 
-                        : student
-                    ));
-                    
-                    setSelectedStudent({...selectedStudent, status: 'Saída confirmada'});
-                  }}
-                  disabled={teacherStatus.ready}
+                  style={styles.studentCard}
+                  onPress={() => setSelectedStudent(item)}
                 >
-                  <Text style={styles.buttonText}>
-                    {teacherStatus.ready ? `Confirmado (${teacherStatus.time})` : "Aluno Pronto para Saída"}
-                  </Text>
+                  <Text style={styles.studentName}>{item.name}</Text>
+                  <Text style={styles.studentStatus}>{item.status}</Text>
                 </TouchableOpacity>
-              </View>
-            )}
+              )}
+            />
           </View>
         )
       ) : (
-        // Tela de Chat
         <View style={styles.section}>
-          <Text style={styles.title}>Mensagens</Text>
-          {chats.length > 0 ? (
-            <FlatList
-              data={chats}
-              keyExtractor={item => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity 
-                  style={styles.chatItem}
-                  onPress={() => {
-                    setActiveChatId(item.id);
-                    setChatModalVisible(true);
-                  }}
-                >
-                  <View style={styles.chatItemContent}>
-                    <Text style={styles.chatName}>{item.name}</Text>
-                    <Text style={styles.chatLastMessage} numberOfLines={1}>
-                      {item.lastMessage}
-                    </Text>
-                  </View>
-                  <View style={styles.chatItemMeta}>
-                    <Text style={styles.chatTime}>{item.time}</Text>
-                    {item.unread > 0 && (
-                      <View style={styles.unreadBadge}>
-                        <Text style={styles.unreadText}>{item.unread}</Text>
-                      </View>
-                    )}
-                  </View>
-                </TouchableOpacity>
-              )}
-            />
-          ) : (
-            <View style={styles.emptyState}>
-              <Ionicons name="chatbubble-ellipses-outline" size={48} color="#94a3b8" />
-              <Text style={styles.emptyStateText}>Nenhuma conversa ainda</Text>
-            </View>
-          )}
+          <Text style={styles.title}>Configurações</Text>
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+            <Text style={styles.logoutButtonText}>Sair</Text>
+          </TouchableOpacity>
         </View>
       )}
-      
-      {/* Chat Modal */}
-      {renderChatModal()}
-      
-      {/* Barra de navegação */}
+
       <View style={styles.tabBar}>
-        <TouchableOpacity 
-          style={[styles.tabItem, activeTab === 'main' && styles.activeTab]} 
+        <TouchableOpacity
+          style={styles.tabButton}
           onPress={() => setActiveTab('main')}
         >
-          <Ionicons 
-            name={userRole === 'pai' ? "car-outline" : "school-outline"} 
-            size={24} 
-            color={activeTab === 'main' ? "#4f46e5" : "#64748b"} 
+          <Ionicons
+            name="home"
+            size={24}
+            color={activeTab === 'main' ? '#6366f1' : '#a1a1aa'}
           />
-          <Text style={[styles.tabText, activeTab === 'main' && styles.activeTabText]}>
-            {userRole === 'pai' ? 'Chegada' : 'Dashboard'}
+          <Text
+            style={[
+              styles.tabButtonText,
+              activeTab === 'main' && styles.activeTabButtonText,
+            ]}
+          >
+            Principal
           </Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.tabItem, activeTab === 'chat' && styles.activeTab]} 
-          onPress={() => setActiveTab('chat')}
+
+        <TouchableOpacity
+          style={styles.tabButton}
+          onPress={() => setActiveTab('settings')}
         >
-          <Ionicons 
-            name="chatbubbles-outline" 
-            size={24} 
-            color={activeTab === 'chat' ? "#4f46e5" : "#64748b"} 
+          <Ionicons
+            name="settings"
+            size={24}
+            color={activeTab === 'settings' ? '#6366f1' : '#a1a1aa'}
           />
-          <Text style={[styles.tabText, activeTab === 'chat' && styles.activeTabText]}>
-            Mensagens
+          <Text
+            style={[
+              styles.tabButtonText,
+              activeTab === 'settings' && styles.activeTabButtonText,
+            ]}
+          >
+            Configurações
           </Text>
         </TouchableOpacity>
       </View>
+
+      {renderChatModal()}
     </View>
   );
 }
 
-// Estilos
 const styles = StyleSheet.create({
-  // Estilos mantidos do original
+  container: {
+    flex: 1,
+    backgroundColor: '#f3f4f6',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+  },
+  section: {
+    flex: 1,
+    padding: 20,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1e293b',
+    marginBottom: 20,
+  },
+  // Estilos do onboarding
+  onboardingSlide: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  onboardingImage: {
+    width: width * 0.8,
+    height: height * 0.4,
+    marginBottom: 20,
+  },
+  onboardingTitle: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#1e293b',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  onboardingDescription: {
+    fontSize: 16,
+    color: '#475569',
+    textAlign: 'center',
+  },
+  paginationContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: 50,
+  },
+  paginationDot: {
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#cbd5e1',
+    marginHorizontal: 5,
+  },
+  skipButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 1,
+  },
+  skipButtonText: {
+    fontSize: 16,
+    color: '#4f46e5',
+  },
+  nextButton: {
+    position: 'absolute',
+    bottom: 40,
+    right: 20,
+    zIndex: 1,
+  },
+  nextButtonGradient: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 25,
+  },
+  nextButtonText: {
+    fontSize: 16,
+    color: '#fff',
+    marginRight: 5,
+  },
+  // Estilos de login e signup
   loginContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
   loginBox: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    padding: 25,
-    borderRadius: 20,
-    width: '85%',
+    backgroundColor: '#fff',
+    padding: 20,
+    borderRadius: 10,
+    width: width * 0.8,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
   },
   profileImage: {
     width: 100,
     height: 100,
     borderRadius: 50,
-    marginBottom: 25,
+    marginBottom: 20,
   },
   input: {
     width: '100%',
-    height: 50,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    marginBottom: 15,
-    color: '#0f172a',
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 5,
+    backgroundColor: '#f9fafb',
   },
   roleSelector: {
     flexDirection: 'row',
-    gap: 10,
-    marginVertical: 15,
+    marginBottom: 20,
   },
   roleButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 25,
-    borderRadius: 8,
-    backgroundColor: '#e2e8f0',
+    padding: 10,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    marginHorizontal: 5,
   },
   selectedRole: {
     backgroundColor: '#6366f1',
+    borderColor: '#6366f1',
   },
   roleText: {
-    color: '#0f172a',
-    fontWeight: '500',
+    color: '#475569',
   },
   selectedRoleText: {
-    color: 'white',
+    color: '#fff',
   },
   loginButton: {
-    width: '100%',
     backgroundColor: '#4f46e5',
-    padding: 15,
-    borderRadius: 10,
-    marginTop: 10,
+    padding: 12,
+    borderRadius: 5,
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 10,
   },
   loginButtonText: {
-    color: 'white',
-    textAlign: 'center',
-    fontWeight: '600',
+    color: '#fff',
     fontSize: 16,
+    fontWeight: 'bold',
+  },
+  secondaryLoginButton: {
+    backgroundColor: '#e0e7ff',
+    padding: 12,
+    borderRadius: 5,
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  secondaryLoginButtonText: {
+    color: '#4f46e5',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   signupText: {
-    color: '#64748b',
-    marginTop: 20,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-  },
-  section: {
-    flex: 1,
-    backgroundColor: 'white',
-    padding: 20,
-    marginBottom: 60, // Espaço para a barra de navegação
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '600',
-    marginBottom: 20,
-    color: '#1e293b',
-    textAlign: 'center',
-  },
-  button: {
-    backgroundColor: '#4f46e5',
-    padding: 15,
-    borderRadius: 10,
-  },
-  disabledButton: {
-    backgroundColor: '#94a3b8',
-  },
-  buttonText: {
-    color: 'white',
-    textAlign: 'center',
-    fontWeight: '500',
-  },
-  
-  // Novos estilos para o Dashboard
-  subtitle: {
-    fontSize: 18,
-    fontWeight: '500',
-    marginBottom: 10,
-    color: '#334155',
-  },
-  studentCard: {
-    flexDirection: 'row',
-    backgroundColor: '#f8fafc',
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 10,
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  studentInfo: {
-    flex: 1,
-  },
-  studentName: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#1e293b',
-    marginBottom: 4,
-  },
-  studentClass: {
-    fontSize: 14,
-    color: '#64748b',
-  },
-  studentStatusContainer: {
-    paddingHorizontal: 10,
-  },
-  studentStatus: {
-    fontSize: 12,
-    fontWeight: '500',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  statusPresent: {
-    backgroundColor: '#dcfce7',
-    color: '#166534',
-  },
-  statusComing: {
-    backgroundColor: '#ffedd5',
-    color: '#9a3412',
-  },
-  statusConfirmed: {
-    backgroundColor: '#e0e7ff',
-    color: '#3730a3',
-  },
-  statusAbsent: {
-    backgroundColor: '#fee2e2',
-    color: '#b91c1c',
-  },
-  studentDetail: {
-    backgroundColor: '#f8fafc',
-    padding: 15,
-    borderRadius: 12,
-    marginTop: 20,
-    marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  studentDetailHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  studentDetailName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1e293b',
-  },
-  studentDetailInfo: {
-    flexDirection: 'row',
-    marginBottom: 10,
-  },
-  studentDetailLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#64748b',
-    width: 100,
-  },
-  studentDetailValue: {
-    fontSize: 14,
-    color: '#1e293b',
-    flex: 1,
-  },
-  textPresent: {
-    color: '#166534',
-  },
-  textComing: {
-    color: '#9a3412',
-  },
-  textConfirmed: {
-    color: '#3730a3',
-  },
-  textAbsent: {
-    color: '#b91c1c',
-  },
-  
-  // Estilos para barra de navegação
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: 'white',
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 60,
-  },
-  tabItem: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  activeTab: {
-    borderTopWidth: 2,
-    borderTopColor: '#4f46e5',
-  },
-  tabText: {
-    fontSize: 12,
-    marginTop: 2,
-    color: '#64748b',
-  },
-  activeTabText: {
     color: '#4f46e5',
   },
-  
-  // Estilos para o Chat
-  chatItem: {
+  // Estilos da área principal
+  addButton: {
     flexDirection: 'row',
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  chatItemContent: {
-    flex: 1,
-  },
-  chatName: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#1e293b',
-    marginBottom: 4,
-  },
-  chatLastMessage: {
-    fontSize: 14,
-    color: '#64748b',
-  },
-  chatItemMeta: {
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    height: '100%',
-  },
-  chatTime: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginBottom: 5,
-  },
-  unreadBadge: {
+    alignItems: 'center',
     backgroundColor: '#4f46e5',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    justifyContent: 'center',
+    padding: 10,
+    borderRadius: 5,
+    marginBottom: 20,
+  },
+  addButtonText: {
+    color: '#fff',
+    marginLeft: 10,
+  },
+  studentCard: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 5,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  studentName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1e293b',
+  },
+  studentStatus: {
+    fontSize: 14,
+    color: '#475569',
+  },
+  // Estilos da barra de abas
+  tabBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingVertical: 10,
+  },
+  tabButton: {
     alignItems: 'center',
   },
-  unreadText: {
-    color: 'white',
+  tabButtonText: {
     fontSize: 12,
-    fontWeight: '500',
+    color: '#a1a1aa',
   },
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
+  activeTabButtonText: {
+    color: '#6366f1',
+  },
+  // Estilos do botão de logout
+  logoutButton: {
+    backgroundColor: '#dc2626',
+    padding: 12,
+    borderRadius: 5,
+    width: '100%',
     alignItems: 'center',
-    paddingVertical: 60,
   },
-  emptyStateText: {
-    marginTop: 10,
+  logoutButtonText: {
+    color: '#fff',
     fontSize: 16,
-    color: '#94a3b8',
+    fontWeight: 'bold',
   },
-  
-  // Estilos para o Chat Modal
+  // Estilos do modal de chat
   modalContainer: {
     flex: 1,
-    backgroundColor: 'white',
+    backgroundColor: '#f3f4f6',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -751,61 +825,56 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontSize: 18,
-    fontWeight: '500',
-    marginLeft: 15,
+    fontWeight: 'bold',
     color: '#1e293b',
+    marginLeft: 10,
   },
   messagesList: {
     flex: 1,
-    padding: 15,
-    backgroundColor: '#f8fafc',
+    padding: 10,
   },
   messageContainer: {
     maxWidth: '80%',
-    padding: 12,
-    borderRadius: 16,
-    marginBottom: 10,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
   },
   sentMessage: {
     alignSelf: 'flex-end',
-    backgroundColor: '#4f46e5',
+    backgroundColor: '#d1d5db',
   },
   receivedMessage: {
     alignSelf: 'flex-start',
-    backgroundColor: '#e2e8f0',
+    backgroundColor: '#e5e7eb',
   },
   messageText: {
     fontSize: 16,
-    color: 'white',
+    color: '#1e293b',
   },
   messageTime: {
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.7)',
-    alignSelf: 'flex-end',
-    marginTop: 5,
+    fontSize: 12,
+    color: '#475569',
+    marginTop: 4,
   },
   messageInputContainer: {
     flexDirection: 'row',
+    alignItems: 'center',
     padding: 10,
     borderTopWidth: 1,
     borderTopColor: '#e2e8f0',
-    backgroundColor: 'white',
   },
   messageInput: {
     flex: 1,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    maxHeight: 100,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    marginRight: 10,
+    backgroundColor: '#f9fafb',
   },
   sendButton: {
     backgroundColor: '#4f46e5',
-    width: 45,
-    height: 45,
-    borderRadius: 22.5,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 10,
+    padding: 10,
+    borderRadius: 8,
   },
 });
