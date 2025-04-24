@@ -137,7 +137,7 @@ export default function App() {
     try {
       setLoading(true);
       
-      // Criar usuário
+      // Primeiro cria o usuário
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
@@ -148,30 +148,37 @@ export default function App() {
           }
         }
       });
-
-      if (authError) throw authError;
-
-      // Se usuário criado com sucesso, adicionar à tabela de perfis
+  
+      if (authError) {
+        throw authError;
+      }
+  
+      // Verifica se o usuário foi criado com sucesso
       if (authData.user) {
+        // Insere na tabela de perfis
         const { error: profileError } = await supabase
           .from('profiles')
-          .insert([
-            { 
-              id: authData.user.id, 
-              name, 
-              email,
-              role: userRole,
-              created_at: new Date()
-            }
-          ]);
-
+          .insert([{
+            id: authData.user.id,
+            name,
+            email,
+            role: userRole,
+            created_at: new Date().toISOString()
+          }]);
+  
         if (profileError) throw profileError;
+  
+        Alert.alert(
+          "Sucesso", 
+          "Conta criada com sucesso! Verifique seu email para confirmação."
+        );
       }
-
-      Alert.alert("Sucesso", "Conta criada com sucesso!");
-      
     } catch (error) {
-      Alert.alert("Erro no cadastro", error.message);
+      console.error('Erro completo:', error);
+      Alert.alert(
+        "Erro no cadastro", 
+        error.message || 'Erro ao criar conta. Tente novamente.'
+      );
     } finally {
       setLoading(false);
     }
