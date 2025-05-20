@@ -15,7 +15,8 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.alertaescola"
     },
     "android": {
       "adaptiveIcon": {
@@ -26,6 +27,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "sdkVersion": "53.0.0",
+    "extra": {
+      "eas": {
+        "projectId": "your-project-id"
+      }
     }
   }
 }

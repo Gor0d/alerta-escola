@@ -15,15 +15,18 @@ import {
   ActivityIndicator,
   StyleSheet
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// Removed unused AsyncStorage import
 import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from './services/supabase';
 
+// Importe os componentes da área do professor
+import TeacherDashboard from './screens/TeacherDashboard';
+import StudentManagement from './screens/StudentManagement';
+
 const { width, height } = Dimensions.get('window');
 
-// Configuração de notificações
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -41,24 +44,28 @@ export default function App() {
   const [name, setName] = useState('');
   const [activeTab, setActiveTab] = useState('main');
   const [showOnboarding, setShowOnboarding] = useState(true);
-  const [userRole, setUserRole] = useState('parent');
+  const [userRole, setUserRole] = useState('teacher');
   const [isSignUp, setIsSignUp] = useState(false);
   const [students, setStudents] = useState([]);
-  const [selectedStudent, setSelectedStudent] = useState(null);
-  const [chats, setChats] = useState([]);
-  const [activeChatId, setActiveChatId] = useState(null);
-  const [messages, setMessages] = useState([]);
+  // Removed unused selectedStudent state
+  const [chats] = useState([]); // Retained chats for rendering but removed unused setChats
+  const [activeChatId] = useState(null); // Retained activeChatId for rendering but removed unused setActiveChatId
+  const [messages] = useState([]); // Retained messages for rendering but removed unused setMessages
   const [newMessage, setNewMessage] = useState('');
   const [chatModalVisible, setChatModalVisible] = useState(false);
-  const [parentStatus, setParentStatus] = useState({ sent: false, time: '' });
-  const [teacherStatus, setTeacherStatus] = useState({ ready: false, time: '' });
+  // Removed unused parentStatus and setParentStatus state
+  // Removed unused teacherStatus and setTeacherStatus state
   const [currentPage, setCurrentPage] = useState(0);
+  // Adicione o novo estado para controlar a tela ativa
+  const [activeScreen, setActiveScreen] = useState('main');
   
   // Refs
   const flatListRef = useRef(null);
   const scrollX = useRef(new Animated.Value(0)).current;
+
+  console.log('UserRole:', userRole);
+console.log('ActiveScreen:', activeScreen);
   
-  // Dados para onboarding
   const onboardingData = [
     {
       id: '1',
@@ -80,11 +87,10 @@ export default function App() {
     }
   ];
 
-  // Login com email e senha (alternativa ao OTP)
   const handleEmailLogin = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { error } = await supabase.auth.signInWithPassword({ // Removed unused data
         email: email,
         password: password,
       });
@@ -97,7 +103,6 @@ export default function App() {
     }
   };
 
-  // Login com OTP (magic link)
   const handleMagicLinkLogin = async () => {
     const now = Date.now();
 
@@ -127,7 +132,6 @@ export default function App() {
     }
   };
 
-  // Cadastro de usuário
   const handleSignUp = async () => {
     if (!email || !password || !name) {
       Alert.alert("Erro", "Preencha todos os campos");
@@ -137,7 +141,6 @@ export default function App() {
     try {
       setLoading(true);
       
-      // Primeiro cria o usuário
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
@@ -153,9 +156,7 @@ export default function App() {
         throw authError;
       }
   
-      // Verifica se o usuário foi criado com sucesso
       if (authData.user) {
-        // Insere na tabela de perfis
         const { error: profileError } = await supabase
           .from('profiles')
           .insert([{
@@ -184,7 +185,6 @@ export default function App() {
     }
   };
 
-  // Logout
   const handleLogout = async () => {
     try {
       setLoading(true);
@@ -198,17 +198,44 @@ export default function App() {
   };
   
   const handleAddStudent = () => {
-    // Lógica para adicionar aluno
     console.log('Adicionando aluno');
   };
   
   const loadUserData = async (user) => {
-    // Lógica para carregar dados do usuário
     console.log('Carregando dados do usuário:', user.id);
+    
+    try {
+      // Buscar o perfil do usuário para determinar a função
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+      
+      if (profileError) throw profileError;
+      
+      if (profileData) {
+        setUserRole(profileData.role);
+        
+        // Se for professor, defina a tela inicial como 'main'
+        if (profileData.role === 'teacher') {
+          setActiveScreen('main');
+        }
+      }
+      
+      // Carregar estudantes (mock para demonstração)
+      setStudents([
+        { id: '1', name: 'João Silva', status: 'Presente hoje' },
+        { id: '2', name: 'Maria Oliveira', status: 'Ausente hoje' },
+        { id: '3', name: 'Pedro Santos', status: 'Presente hoje' }
+      ]);
+      
+    } catch (error) {
+      console.error('Erro ao carregar dados do usuário:', error);
+    }
   };
   
   const checkIfFirstLaunch = async () => {
-    // Lógica para verificar primeiro acesso
     console.log('Verificando primeiro acesso');
   };
   
@@ -226,9 +253,26 @@ export default function App() {
   };
   
   const handleSendMessage = () => {
-    // Lógica para enviar mensagens
     console.log('Enviar mensagem:', newMessage);
     setNewMessage(''); // Limpar o campo de mensagem após enviar
+  };
+
+  // Função de navegação simulada para uso nos componentes
+  const navigationProp = {
+    navigate: (screen, params = {}) => {
+      console.log(`Navegando para ${screen} com parâmetros:`, params);
+      
+      if (screen === 'TeacherDashboard') {
+        setActiveScreen('main');
+      } else if (screen === 'StudentManagement') {
+        setActiveScreen('studentManagement');
+      } else if (screen === 'ChatScreen') {
+        setChatModalVisible(true);
+      } else if (screen === 'StudentDetail') {
+        // Implementar futuramente
+        console.log('Navegação para StudentDetail com ID:', params.studentId);
+      }
+    }
   };
 
   useEffect(() => {
@@ -252,7 +296,7 @@ export default function App() {
 
     checkSession();
   
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => { // Removed unused event
       setUser(session?.user ?? null);
       if (session?.user) {
         loadUserData(session.user);
@@ -263,7 +307,6 @@ export default function App() {
     return () => subscription?.unsubscribe?.();
   }, []);
 
-  // Renderização do onboarding
   const renderOnboardingItem = ({ item }) => (
     <View style={[styles.onboardingSlide, { width }]}>
       <Image source={item.image} style={styles.onboardingImage} resizeMode="contain" />
@@ -297,7 +340,6 @@ export default function App() {
     </View>
   );
 
-  // Renderização do chat
   const renderChatModal = () => (
     <Modal
       animationType="slide"
@@ -358,7 +400,6 @@ export default function App() {
     );
   }
 
-  // Tela de onboarding
   if (showOnboarding) {
     return (
       <View style={styles.container}>
@@ -401,7 +442,6 @@ export default function App() {
     );
   }
 
-  // Tela de autenticação
   if (!user) {
     return (
       <LinearGradient colors={['#6366f1', '#4338ca']} style={styles.loginContainer}>
@@ -489,7 +529,6 @@ export default function App() {
     );
   }
 
-  // Tela principal após login
   return (
     <View style={styles.container}>
       {activeTab === 'main' ? (
@@ -520,22 +559,29 @@ export default function App() {
             />
           </View>
         ) : (
-          <View style={styles.section}>
-            <Text style={styles.title}>Área do Professor</Text>
-            <FlatList
-              data={students}
-              keyExtractor={item => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.studentCard}
-                  onPress={() => setSelectedStudent(item)}
-                >
-                  <Text style={styles.studentName}>{item.name}</Text>
-                  <Text style={styles.studentStatus}>{item.status}</Text>
-                </TouchableOpacity>
-              )}
-            />
-          </View>
+          // Área do professor - agora usando os novos componentes
+          activeScreen === 'main' ? (
+            <TeacherDashboard navigation={navigationProp} />
+          ) : activeScreen === 'studentManagement' ? (
+            <StudentManagement navigation={navigationProp} />
+          ) : (
+            <View style={styles.section}>
+              <Text style={styles.title}>Área do Professor</Text>
+              <FlatList
+                data={students}
+                keyExtractor={item => item.id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.studentCard}
+                    onPress={() => setSelectedStudent(item)}
+                  >
+                    <Text style={styles.studentName}>{item.name}</Text>
+                    <Text style={styles.studentStatus}>{item.status}</Text>
+                  </TouchableOpacity>
+                )}
+              />
+            </View>
+          )
         )
       ) : (
         <View style={styles.section}>
@@ -549,7 +595,10 @@ export default function App() {
       <View style={styles.tabBar}>
         <TouchableOpacity
           style={styles.tabButton}
-          onPress={() => setActiveTab('main')}
+          onPress={() => {
+            setActiveTab('main');
+            setActiveScreen('main');
+          }}
         >
           <Ionicons
             name="home"
